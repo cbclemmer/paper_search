@@ -1,10 +1,9 @@
 import os
-import re
 from time import time
 import json
 import PyPDF2
-import numpy as np
 from typing import List
+import requests
 
 def flatten(stacked_list):
     flattened_list = []
@@ -12,36 +11,6 @@ def flatten(stacked_list):
         for i in batch:
             flattened_list.append(i)
     return flattened_list
-
-def load_glove_embeddings(embeddings_file):
-    embeddings = {}
-    with open(embeddings_file, 'r', encoding='utf8') as f:
-        for line in f:
-            values = line.split(' ')
-            word = values[0]
-            vector = np.asarray(values[1:], dtype='float32')
-            embeddings[word] = vector
-    return embeddings
-
-def create_text_embedding(string: str, embeddings: dict) -> List[int]:
-    cleaned_string = re.sub(r'[^a-zA-Z0-9\s]', '', string)
-    embedding = []
-    found_words = 0
-    for wd in cleaned_string.split(' '):
-        wd = wd.lower()
-        if wd in embeddings:
-            found_words += 1
-            wd_embedding = embeddings[wd].tolist()
-            if len(embedding) > 0:
-                for i in range(0, len(wd_embedding)):
-                    embedding[i] += wd_embedding[i]
-            else:
-                embedding = wd_embedding
-    if len(embedding) == 0:
-        return []
-    for i in range(0, len(embedding)):
-        embedding[i] /= found_words
-    return embedding
 
 def chunk_text(text: str, chunk_size: int) -> List[str]:
     chunks = []
@@ -57,7 +26,15 @@ def get_pdf_text(file_path: str) -> str:
         file_text += pdf_reader.pages[page_num].extract_text()
     return file_text
 
-def process_paper(file_path: str, glove_embeddings: dict):
+def create_glove_embedding(text: str):
+    res = requests.post('localhost:5000/create')
+    if res.status_code != 200:
+        print('Error creating embedding:')
+        print(res)
+        return None
+    return res.json()
+
+def process_paper(file_path: str):
     # TODO: add more metadata from page sections and citations
     file_text = get_pdf_text(file_path)
 
@@ -66,12 +43,15 @@ def process_paper(file_path: str, glove_embeddings: dict):
     data = []
     idx = 0
     for chunk in chunks:
+        embedding = create_glove_embedding(chunk)
+        idx += 1
+        if embedding == None:
+            continue
         data.append({
             "file": file_path,
-            "char_index": idx * chunk_size,
-            "embedding": create_text_embedding(chunk, glove_embeddings)
+            "char_index": (idx - 1) * chunk_size,
+            "embedding": embedding
         })
-        idx += 1
     return (data, file_text)
 
 def import_papers():
@@ -90,14 +70,13 @@ def import_papers():
     
     print('Loading Glove embeddings')
     glove_start = time()
-    glove_embeddings = load_glove_embeddings('glove.txt')
     print(f'Vector embeddings file loaded in {time() - glove_start:.2f}s')
     
     papers = []
     paper_texts = []
     start_parse = time()
     for file in files:
-      (file_data, file_text) = process_paper(file, glove_embeddings)
+      (file_data, file_text) = process_paper(file)
       papers.append(file_data)
       paper_texts.append({
           "file": file,
