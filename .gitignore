@@ -1,3 +1,5 @@
 __pycache__/
 papers/
 glove.txt
+texts.json
+embeddings.json

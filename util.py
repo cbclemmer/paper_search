@@ -5,18 +5,6 @@ import json
 import PyPDF2
 import numpy as np
 from typing import List
-from joblib import Parallel, delayed
-
-def batchify(list, num_batches):
-    batch_len = len(list) // num_batches
-    batches = []
-    current_batch = []
-    for i in list:
-        current_batch.append(i)
-        if len(current_batch) >= batch_len:
-            batches.append(current_batch)
-            current_batch = []
-    return batches
 
 def flatten(stacked_list):
     flattened_list = []
@@ -24,14 +12,6 @@ def flatten(stacked_list):
         for i in batch:
             flattened_list.append(i)
     return flattened_list
-
-# function must be in the form of fn(thread_idx, batch, all_items)
-def parallelize(fn, num_threads, list):
-    batches = batchify(list, num_threads)
-    ret_batches = Parallel(n_jobs=num_threads)(
-        delayed(fn)(idx, batch, list) for (batch, idx) in zip(batches, range(0, num_threads))
-    )
-    return flatten(ret_batches)
 
 def load_glove_embeddings(embeddings_file):
     embeddings = {}
@@ -70,12 +50,16 @@ def chunk_text(text: str, chunk_size: int) -> List[str]:
         text = text[chunk_size:]
     return chunks
 
-def process_paper(file_path: str, glove_embeddings: dict):
+def get_pdf_text(file_path: str) -> str:
     pdf_reader = PyPDF2.PdfReader(f'papers/{file_path}')
     file_text = ''
-    # TODO: add more metadata from page sections and citations
     for page_num in range(0, len(pdf_reader.pages)):
         file_text += pdf_reader.pages[page_num].extract_text()
+    return file_text
+
+def process_paper(file_path: str, glove_embeddings: dict):
+    # TODO: add more metadata from page sections and citations
+    file_text = get_pdf_text(file_path)
 
     chunk_size = 1000
     chunks = chunk_text(file_text, chunk_size)
@@ -84,33 +68,45 @@ def process_paper(file_path: str, glove_embeddings: dict):
     for chunk in chunks:
         data.append({
             "file": file_path,
-            "text": chunk,
             "char_index": idx * chunk_size,
             "embedding": create_text_embedding(chunk, glove_embeddings)
         })
         idx += 1
-    return data
+    return (data, file_text)
 
-def main():
+def import_papers():
     if not os.path.exists('glove.txt'):
         print('Error: There is no glove vector file present. Add the glove.txt file to the project directory')
-        return
+        return 1
 
     if not os.path.exists('papers'):
         print('Error: There is no papers directory, add papers to the "papers" folder to import them')
-        return
+        return 1
     
-    print('Loading Glove embeddins')
+    files = os.listdir('papers')
+    if len(files) == 0:
+        print('Error: No files found in papers folder')
+        return 1
+    
+    print('Loading Glove embeddings')
     glove_start = time()
     glove_embeddings = load_glove_embeddings('glove.txt')
     print(f'Vector embeddings file loaded in {time() - glove_start:.2f}s')
-
-    files = os.listdir('papers')
+    
     papers = []
+    paper_texts = []
+    start_parse = time()
     for file in files:
-      papers.append(process_paper(file, glove_embeddings))
+      (file_data, file_text) = process_paper(file, glove_embeddings)
+      papers.append(file_data)
+      paper_texts.append({
+          "file": file,
+          "text": file_text
+      })
+    print(f'Parsed papers in {time() - start_parse:.2f}s')
 
     with open('embeddings.json', 'w') as f:
-        f.write(json.dumps(papers))
-
-main()
+        f.write(json.dumps(flatten(papers)))
+    with open('texts.json', 'w') as f:
+        f.write(json.dumps(paper_texts))
+    return 1
